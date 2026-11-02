@@ -11,6 +11,7 @@ from typing import Any, Iterable, Iterator
 
 import tiktoken
 
+from services.image_input_errors import ImageInputError
 from services.account_service import account_service
 from services.config import config
 from services.openai_backend_api import OpenAIBackendAPI
@@ -624,6 +625,12 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                     return
                 account_service.mark_image_result(token, True)
                 break
+            except ImageInputError as exc:
+                account_service.mark_image_result(token, False)
+                raise ImageGenerationError(
+                    str(exc), status_code=400,
+                    error_type="invalid_request_error", code="image_input_missing",
+                ) from exc
             except ImageGenerationError:
                 account_service.mark_image_result(token, False)
                 raise

@@ -1,0 +1,71 @@
+--- a/services/openai_backend_api.py
++++ b/services/openai_backend_api.py
+@@ -20,6 +20,7 @@
+ from curl_cffi import requests
+ from PIL import Image
+ 
++from services.image_input_errors import ImageInputError, find_image_input_error
+ from services.account_service import account_service
+ from services.config import config
+ from services.proxy_service import proxy_settings
+@@ -2241,6 +2242,10 @@
+                 if _retry_sleep("network", None, str(exc), None):
+                     continue
+                 break
++
++            input_error = find_image_input_error(conversation)
++            if input_error:
++                raise ImageInputError(input_error, conversation_id)
+ 
+             for record in self._extract_image_tool_records(conversation):
+                 for file_id in record["file_ids"]:
+--- a/services/protocol/conversation.py
++++ b/services/protocol/conversation.py
+@@ -11,6 +11,7 @@
+ 
+ import tiktoken
+ 
++from services.image_input_errors import ImageInputError
+ from services.account_service import account_service
+ from services.config import config
+ from services.image_storage_service import image_storage_service
+@@ -1431,6 +1432,14 @@
+                 account_email=account_email,
+                 conversation_id=getattr(exc, "conversation_id", ""),
+             ) from exc
++        except ImageInputError as exc:
++            account_service.mark_image_result(token, False)
++            raise ImageGenerationError(
++                str(exc), status_code=400,
++                error_type="invalid_request_error", code="image_input_missing",
++                account_email=account_email,
++                conversation_id=exc.conversation_id,
++            ) from exc
+         except ImageGenerationError as exc:
+             account_service.mark_image_result(token, False)
+             if account_email and not getattr(exc, "account_email", ""):
+--- /dev/null
++++ b/services/image_input_errors.py
+@@ -0,0 +1,22 @@
++"""Recognize explicit image-tool input failures without treating them as timeouts."""
++
++class ImageInputError(RuntimeError):
++    def __init__(self, message: str, conversation_id: str = "") -> None:
++        super().__init__(message)
++        self.conversation_id = conversation_id
++
++
++def find_image_input_error(conversation: dict) -> str:
++    # Restrict to actual tool outputs; quoted source/user/assistant text is not an error.
++    for node in (conversation.get("mapping") or {}).values():
++        message = (node or {}).get("message") or {}
++        if (message.get("author") or {}).get("role") != "tool":
++            continue
++        content = message.get("content") or {}
++        if content.get("content_type") != "text":
++            continue
++        text = " ".join(part for part in content.get("parts", []) if isinstance(part, str))
++        normalized = text.lower()
++        if "no usable image target" in normalized and "edit or restore" in normalized:
++            return text
++    return ""

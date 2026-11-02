@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterator, Optional
 from curl_cffi import requests
 from PIL import Image
 
+from services.image_input_errors import ImageInputError, find_image_input_error
 from services.account_service import account_service
 from services.config import config
 from services.proxy_service import proxy_settings
@@ -647,6 +648,10 @@ class OpenAIBackendAPI:
             attempt += 1
             conversation = self._get_conversation(conversation_id)
             file_ids, sediment_ids = [], []
+            input_error = find_image_input_error(conversation)
+            if input_error:
+                raise ImageInputError(input_error, conversation_id)
+
             for record in self._extract_image_tool_records(conversation):
                 for file_id in record["file_ids"]:
                     if file_id not in file_ids:
